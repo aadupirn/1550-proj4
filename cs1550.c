@@ -98,11 +98,21 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	char filename[MAX_FILENAME+1];
 	char extension[MAX_EXTENSION+1];
  
+	//set strings to empty
+	memset(dirname,  0,MAX_FILENAME  + 1);
+	memset(filename, 0,MAX_FILENAME  + 1);
+	memset(extension,0,MAX_EXTENSION + 1);
+
 	//is path the root dir?
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
 		stbuf->st_nlink = 2;
-	} else {
+	} else { //it is not the root
+		
+		//let's seperate this thing
+		sscanf(path,"/%[^/]/%[^.].%s",dirname,filename,extension);
+
+
 
 	//Check if name is subdirectory
 	/* 
