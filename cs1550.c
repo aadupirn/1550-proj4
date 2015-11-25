@@ -81,6 +81,44 @@ struct cs1550_disk_block
 
 typedef struct cs1550_disk_block cs1550_disk_block;
 
+
+
+static int cs1550_find_dir_loc(char* dir){
+
+  FILE *disk = fopen(".disk","rb");
+  if(disk == NULL){
+    printf("error opening .disk\n");
+    return -1;
+  }
+
+  cs1550_root_directory *root;
+
+  int read_ret;
+  read_ret = fread((void*)root, sizeof(cs1550_root_directory), 1,disk);
+  if(read_ret<=0){
+    printf("error reading the root directory\n");
+    return -1;
+  }
+ 
+  int i;
+  for(i=0; i<MAX_DIRS_IN_ROOT; i++){
+    char *name = "";
+    if(root->directories!=NULL)
+      name = root->directories[i].dname;
+    else
+      continue;
+
+    if(strcmp(name,dir)==0)
+      return i;
+  }
+
+  return -ENOENT; //not found
+}
+
+
+
+
+
 /*
  * Called whenever the system wants to know the file attributes, including
  * simply whether the file exists or not. 
@@ -111,16 +149,15 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		
 		//let's seperate this thing
 		sscanf(path,"/%[^/]/%[^.].%s",dirname,filename,extension);
-
-
-
-	//Check if name is subdirectory
-	/* 
-		//Might want to return a structure with these fields
-		stbuf->st_mode = S_IFDIR | 0755;
-		stbuf->st_nlink = 2;
-		res = 0; //no error
-	*/
+		int dir_loc = cs1550_find_dir_loc(dirname);
+                if(dir_loc==-1) //dir does not exist
+			return -ENOENT;
+		//Check if name is subdirectory
+		if(filename[0]=='\0'){ //no file name, and dir exists
+			stbuf->st_mode  = S_IFDIR | 755;
+			stbuf->st_nlink = 2;
+			return 0;
+		}
 
 	//Check if name is a regular file
 	/*
