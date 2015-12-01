@@ -108,15 +108,60 @@ static int cs1550_find_dir_loc(char* dir){
     else
       continue;
 
-    if(strcmp(name,dir)==0)
+    if(strcmp(name,dir)==0){
+      fclose(disk);
       return i;
+    }
   }
-
+  fclose(disk);
   return -ENOENT; //not found
 }
 
 
+static int cs1550_find_file_loc(int dir_loc, char * file, size_t * fsize, long* fblock){
+  FILE * disk = fopen(".disk","rb");
+  if(disk==NULL){
+    printf("error opening .disk \n");
+    return -1;
+  }
+  cs1550_root_directory *root;
 
+  int read_ret;
+  read_ret = fread((void*)root, sizeof(cs1550_root_directory), 1, disk);
+  if(read_ret<=0){
+    printf("error reading the root directory");
+    return -1;
+  }
+
+  long block = root->directories[dir_loc].nStartBlock;
+
+  fseek(disk, block, SEEK_SET);
+  
+  cs1550_directory_entry * entry;
+  
+  read_ret = fread((void*) entry, sizeof(cs1550_directory_entry), 1, disk);
+  if(read_ret<=0){
+    printf("error reading directory entry");
+    return -1;
+  }
+  
+  int i;
+  for(i=0; i<MAX_FILES_IN_DIR; i++){
+    char * name; 
+    if(entry->files!=NULL){
+      name = entry->files[i].fname;
+      if(strcmp(name,file)==0){
+        fclose(disk);
+        fsize = &(entry->files[i].fsize);
+        fblock = &(entry->files[i].nStartBlock);
+        return i;
+      }
+    }
+  }
+  fclose(disk);
+  return -ENOENT;
+
+}
 
 
 /*
@@ -145,12 +190,13 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
 		stbuf->st_nlink = 2;
+		return 0;
 	} else { //it is not the root
 		
 		//let's seperate this thing
 		sscanf(path,"/%[^/]/%[^.].%s",dirname,filename,extension);
 		int dir_loc = cs1550_find_dir_loc(dirname);
-                if(dir_loc==-1) //dir does not exist
+                if(dir_loc<0) //dir does not exist
 			return -ENOENT;
 		//Check if name is subdirectory
 		if(filename[0]=='\0'){ //no file name, and dir exists
@@ -158,6 +204,15 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 			stbuf->st_nlink = 2;
 			return 0;
 		}
+		else{ //we're looking for a file in dirname which is indexed at dir_loc
+ 			size_t fsize = 0;
+			int file_loc = cs1550_find_file_loc(dir_loc, filename, &fsize, NULL);
+			if(file_loc<0)
+				return -ENOENT;
+			stbuf->st_mode = S_IFREG | 0666;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = fsize; //TODO
+		}	
 
 	//Check if name is a regular file
 	/*
