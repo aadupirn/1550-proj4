@@ -90,16 +90,17 @@ static int cs1550_find_dir_loc(char* dir){
     printf("error opening .disk\n");
     return -1;
   }
+  printf("opened .disk\n");
 
-  cs1550_root_directory *root = NULL;
+  cs1550_root_directory *root = malloc(sizeof(cs1550_root_directory));
 
   int read_ret;
-  read_ret = fread((void*)root, sizeof(cs1550_root_directory), 1,disk);
+  read_ret = fread((void*)root, sizeof(cs1550_root_directory), 1, disk);
   if(read_ret<=0){
     printf("error reading the root directory\n");
     return -1;
   }
- 
+  printf("read the root\n");
   int i;
   for(i=0; i<MAX_DIRS_IN_ROOT; i++){
     char *name = "";
@@ -107,10 +108,10 @@ static int cs1550_find_dir_loc(char* dir){
       name = root->directories[i].dname;
     else
       continue;
-
+    printf("we're looking at dname %s\n", name);
     if(strcmp(name,dir)==0){
       fclose(disk);
-      printf("found dir: %s", dir);
+      printf("found dir: %s\n", dir);
       return i;
     }
   }
@@ -197,7 +198,9 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		
 		//let's seperate this thing
 		sscanf(path,"/%[^/]/%[^.].%s",dirname,filename,extension);
+		printf("we're looking for / %s / %s . %s \n", dirname, filename, extension);
 		int dir_loc = cs1550_find_dir_loc(dirname);
+		printf("cs1550_find_dir_loc returned %d\n", dir_loc);
                 if(dir_loc<0) //dir does not exist
 			return -ENOENT;
 		//Check if name is subdirectory
@@ -213,7 +216,8 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				return -ENOENT;
 			stbuf->st_mode = S_IFREG | 0666;
 			stbuf->st_nlink = 1;
-			stbuf->st_size = fsize; 
+			stbuf->st_size = fsize;
+			return 0; 
 		}	
 
 	//Check if name is a regular file
@@ -252,7 +256,23 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	//read the fuse.h file for a description (in the ../include dir)
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
-
+	
+	FILE * disk = fopen(".disk", "rb+");
+        cs1550_root_directory  root;
+        int read_ret = fread((void*) &root, sizeof(cs1550_root_directory), 1, disk);
+        if(read_ret<=0){
+          printf("error reading root directory\n");
+          return -1;
+        }
+	
+	int i;
+	for(i = 0; i<MAX_DIRS_IN_ROOT; i++){
+	  if(root.directories[i].dname[0]!=0){ //this dir exists!
+	    printf("adding %s to readir\n", root.directories[i].dname);
+	    filler(buf, root.directories[i].dname, NULL, 0);
+	  }
+	}
+	
 	/*
 	//add the user stuff (subdirs or files)
 	//the +1 skips the leading '/' on the filenames
@@ -281,33 +301,45 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 //	  printf("error reading the root directory\n");
 //	  return -1;
 //	}
-	char * directory = NULL;
-	char * filename  = NULL;
-	char * extension = NULL;
+
+
+	char directory[MAX_FILENAME+1];
+        char filename [MAX_FILENAME+1];
+        char extension[MAX_EXTENSION+1];
+
+        //set strings to empty
+        memset(directory, 0,MAX_FILENAME  + 1);
+        memset(filename,  0,MAX_FILENAME  + 1);
+        memset(extension, 0,MAX_EXTENSION + 1);
+
+	printf("mkdir path: %s\n", path);
 	sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 	if(directory == NULL){
-	  printf("could not sscanf dir name\n");
+	  printf("could not sscanf dir name, dir: %s\n", directory);
 	  return -1;
 	}
-	if(strlen(directory)>8||strlen(directory<=0)){
+	printf("checking length of %s \n", directory);
+	if(strlen(directory)>8||strlen(directory)<=0){
 	  //fclose(disk);
 	  printf("name too long (or short)\n");
 	  return -ENAMETOOLONG;
 	}
+	printf("good length for directory name\n");
 	int loc = cs1550_find_dir_loc(directory);
 	if(loc>=0){ //it already exists
 	  //fclose(disk);
 	  printf("dir exists\n");
 	  return -EEXIST;
 	}
+	printf("does not already exists\n");
 	FILE * disk = fopen(".disk", "rb+");
-	cs1550_root_directory * root;
-	int read_ret = fread((void*) root, sizeof(cs1550_root_directory), 1, disk);
+	cs1550_root_directory  root;
+	int read_ret = fread((void*) &root, sizeof(cs1550_root_directory), 1, disk);
 	if(read_ret<=0){
 	  printf("error reading root directory\n");
 	  return -1;
 	}
-	if(root->nDirectories >=MAX_DIRS_IN_ROOT){
+	if(root.nDirectories >=MAX_DIRS_IN_ROOT){
 	  printf("too many dirs\n");
 	  fclose(disk);
 	  return -EPERM;
@@ -317,11 +349,11 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 	int i;
 	for(i=0; i<MAX_DIRS_IN_ROOT; i++){
 
-	  if(root->directories[i].dname[0]==0){ //empty dir
+	  if(root.directories[i].dname[0]==0){ //empty dir
 
-	    strcpy(root->directories[i].dname,directory);
-	    root->directories[i].nStartBlock = -1; //TODO find a free block
-
+	    strcpy(root.directories[i].dname,directory);
+	    root.directories[i].nStartBlock = -1; //TODO find a free block
+	    break;
 	  }
 
 	}
@@ -329,8 +361,10 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 	//make dir struct
 	//seek to block
 	//save dir to file at blockize * block bytes from start
-
-
+	rewind(disk);
+	fwrite((void*)&root, sizeof(cs1550_root_directory), 1, disk);
+	fclose(disk);
+	printf("wrote to and clsoed .disk\n");
 	return 0;
 }
 
