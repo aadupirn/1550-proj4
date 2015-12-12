@@ -82,6 +82,59 @@ struct cs1550_disk_block
 typedef struct cs1550_disk_block cs1550_disk_block;
 
 
+static int cs1550_find_free_block(){
+
+  printf("cs1550_find_free_block()\n");
+  FILE * disk;
+  disk = fopen(".disk", "rb+");
+  if(disk == NULL){
+    printf("open disk error\n");
+    return -1;
+  }
+
+  int seek_ret = fseek(disk, -1* BLOCK_SIZE * 3, SEEK_END);
+  if(seek_ret<0){
+    printf("seek error\n");
+    return -1;
+  }
+
+  unsigned char bits[BLOCK_SIZE*3];
+
+  int read_ret = fread(bits, BLOCK_SIZE*3, 1, disk); 
+  if(read_ret <0){
+    printf("read_ret = %d\n");
+    return -1;
+  }
+  seek_ret = fseek(disk, -1* BLOCK_SIZE * 3, SEEK_END);
+  if(seek_ret<0){
+    printf("seek error\n");
+    return -1;
+  }
+
+  int i;
+  printf("searching bitmap for free block\n");
+  for(i=0; i<BLOCK_SIZE*3; i++){
+    printf("i:%d\n", i);
+    unsigned char and = 1;
+    int j;
+    for(j=0 ; j<=8; j++){
+      if( (bits[i] & and) == 0){
+        printf("found a free block, i = %d, j = %d\n",i,j);
+        bits[i]|=and; // set the bit to 1
+        fwrite(bits, BLOCK_SIZE*3, 1, disk);
+        fclose(disk);
+        return i*8 + j +1;
+      }
+      and*=2;
+    }
+  }
+  printf("didn't find a free bit\n");
+  fclose(disk);
+  return -1;  
+
+
+}
+
 
 static int cs1550_find_dir_loc(char* dir){
 
@@ -345,26 +398,43 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 	  return -EPERM;
 	}
 
+	
 
+	fclose(disk);
+	int block_loc = -2;
 	int i;
 	for(i=0; i<MAX_DIRS_IN_ROOT; i++){
 
 	  if(root.directories[i].dname[0]==0){ //empty dir
 
 	    strcpy(root.directories[i].dname,directory);
-	    root.directories[i].nStartBlock = -1; //TODO find a free block
+	    block_loc = cs1550_find_free_block();
+	    printf("block loc = %d\n", block_loc);
+	    root.directories[i].nStartBlock = block_loc; 
 	    break;
 	  }
 
 	}
+  	disk = fopen(".disk", "rb+");
 	//TODO
 	//make dir struct
 	//seek to block
 	//save dir to file at blockize * block bytes from start
+
+
+
+	cs1550_directory_entry new_dir;
+
+	new_dir.nFiles = 0;
+	fseek(disk, BLOCK_SIZE * root.directories[i].nStartBlock , SEEK_SET);
+	fwrite((void*)&root, sizeof(cs1550_directory_entry), 1, disk);
+
 	rewind(disk);
 	fwrite((void*)&root, sizeof(cs1550_root_directory), 1, disk);
 	fclose(disk);
-	printf("wrote to and clsoed .disk\n");
+	printf("wrote to root dir and clsoed .disk\n");
+
+
 	return 0;
 }
 
