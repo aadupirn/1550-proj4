@@ -82,7 +82,7 @@ struct cs1550_disk_block
 typedef struct cs1550_disk_block cs1550_disk_block;
 
 
-static int cs1550_find_free_block(){
+static long cs1550_find_free_block(){
 
   printf("cs1550_find_free_block()\n");
   FILE * disk;
@@ -102,7 +102,7 @@ static int cs1550_find_free_block(){
 
   int read_ret = fread(bits, BLOCK_SIZE*3, 1, disk); 
   if(read_ret <0){
-    printf("read_ret = %d\n");
+    printf("read_ret = %d\n", read_ret);
     return -1;
   }
   seek_ret = fseek(disk, -1* BLOCK_SIZE * 3, SEEK_END);
@@ -111,7 +111,7 @@ static int cs1550_find_free_block(){
     return -1;
   }
 
-  int i;
+  long i;
   printf("searching bitmap for free block\n");
   for(i=0; i<BLOCK_SIZE*3; i++){
     printf("i:%d\n", i);
@@ -133,6 +133,12 @@ static int cs1550_find_free_block(){
   return -1;  
 
 
+}
+
+
+static int cs1550_mark_blocks_free(long block){
+  //TODO
+  return 0;
 }
 
 
@@ -610,6 +616,75 @@ static int cs1550_unlink(const char *path)
 {
     (void) path;
 
+
+    
+	char directory[MAX_FILENAME *2];
+        char filename [MAX_FILENAME *2];
+        char extension[MAX_EXTENSION*2];
+
+        //set strings to empty
+        memset(directory, 0,MAX_FILENAME  * 2);
+        memset(filename,  0,MAX_FILENAME  * 2);
+        memset(extension, 0,MAX_EXTENSION * 2);
+        printf("unlink path: %s\n", path);
+        sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);    
+	
+	if(filename[0]==0){
+	  printf("no file\n");
+	  return -EISDIR;
+	}
+
+	int dir_loc = cs1550_find_dir_loc(directory);
+	if(dir_loc<0){
+	  printf("dir %s not found\n", directory);
+	  return -ENOENT;
+	}
+
+	int file_loc = cs1550_find_file_loc(dir_loc, filename, NULL);
+	if(file_loc<0){
+	  printf("file %s not found\n", filename);
+	  return -ENOENT;
+	}
+	
+	printf("opening disk\n");
+	FILE * disk;
+	disk = fopen(".disk", "rb+");
+	if(disk==NULL){
+	  printf("problem opening the disk\n");
+	  return -1;
+	}
+	printf("reading root\n");
+	cs1550_root_directory root;
+	int read_ret = fread((void*)&root, sizeof(cs1550_root_directory), 1, disk);
+	if(read_ret<0){
+	  printf("problem reading the root\n");
+	  return -1;
+	}
+	long dir_block = root.directories[dir_loc].nStartBlock;
+	
+	printf("reading dir\n");
+	cs1550_directory_entry dir;
+	fseek(disk, dir_block*BLOCK_SIZE, SEEK_SET);
+	read_ret = fread((void*)&dir, sizeof(cs1550_directory_entry), 1, disk);
+	if(read_ret<0){
+	  printf("problem reading the dir\n");
+	  return -1;
+	}
+
+	printf("finding file_block\n");
+	long file_block = dir.files[file_loc].nStartBlock;
+	if(file_block<=0){
+	  printf("problem with the file_block\n");
+	  return -1;
+	}
+	fclose(disk);
+	cs1550_mark_blocks_free(file_block);
+	disk = fopen(".disk", "rb+");
+	dir.files[file_loc].fname[0]=0;
+	fseek(disk, dir_block*BLOCK_SIZE, SEEK_SET);
+	fwrite((void*)&dir, sizeof(cs1550_directory_entry), 1, disk);
+	fclose(disk);
+	
     return 0;
 }
 
@@ -872,6 +947,9 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 	      break;
 	  }
 	  fclose(disk);
+	  if(file.nNextBlock>0){ //we're overwriting stuff, it'd be easier to just get new blocks
+	    cs1550_mark_blocks_free(file.nNextBlock);
+	  }
 	  file.nNextBlock = cs1550_find_free_block();
 	  disk = fopen(".disk", "rb+");
 	  fseek(disk, file_block*BLOCK_SIZE, SEEK_SET);
