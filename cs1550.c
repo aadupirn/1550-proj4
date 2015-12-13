@@ -174,7 +174,7 @@ static int cs1550_find_dir_loc(char* dir){
 }
 
 
-static int cs1550_find_file_loc(int dir_loc, char * file, size_t * fsize, long* fblock){
+static int cs1550_find_file_loc(int dir_loc, char * file, size_t * fsize){
   printf("cs1550_find_file_loc\n");
 
   FILE * disk = fopen(".disk","rb");
@@ -204,16 +204,19 @@ static int cs1550_find_file_loc(int dir_loc, char * file, size_t * fsize, long* 
     printf("error reading directory entry");
     return -1;
   }
-  
+  printf("read entry\n");
   int i;
   for(i=0; i<MAX_FILES_IN_DIR; i++){
     char * name; 
     if(entry.files!=NULL){
       name = entry.files[i].fname;
+      printf("looking at %s\n",name);
       if(strcmp(name,file)==0){
+        printf("found file\n");
         fclose(disk);
-        fsize = &(entry.files[i].fsize);
-        fblock = &(entry.files[i].nStartBlock);
+	if(fsize!=NULL)
+          *fsize = entry.files[i].fsize;
+	printf("returning %d", i);
         return i;
       }
     }
@@ -269,7 +272,7 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		else{ //we're looking for a file in dirname which is indexed at dir_loc
 			printf("looking for a file\n");
  			size_t fsize = 0;
-			int file_loc = cs1550_find_file_loc(dir_loc, filename, &fsize, NULL);
+			int file_loc = cs1550_find_file_loc(dir_loc, filename, &fsize);
 			if(file_loc<0)
 				return -ENOENT;
 			printf("file loc is %d\n", file_loc);
@@ -530,7 +533,7 @@ static int cs1550_mknod(const char *path, mode_t mode, dev_t dev)
 	  return -EPERM;
 	}
 
-	int file_loc = cs1550_find_file_loc(loc, filename, NULL, NULL);
+	int file_loc = cs1550_find_file_loc(loc, filename, NULL);
 	if(file_loc>=0){
 	  printf("find file\n");
 	  return -EEXIST;
@@ -622,29 +625,6 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	(void) fi;
 	(void) path;
 
-	//check to make sure path exists
-	//check that size is > 0
-	//check that offset is <= to the file size
-	//read in data
-	//set size and return, or error
-
-	size = 0;
-
-	return size;
-}
-
-/* 
- * Write size bytes from buf into file starting from offset
- *
- */
-static int cs1550_write(const char *path, const char *buf, size_t size, 
-			  off_t offset, struct fuse_file_info *fi)
-{
-	(void) buf;
-	(void) offset;
-	(void) fi;
-	(void) path;
-	
 	if(size<=0){
 	  printf("size = %d",size);
 	  return -1;
@@ -658,20 +638,23 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
         memset(directory, 0,MAX_FILENAME  * 2);
         memset(filename,  0,MAX_FILENAME  * 2);
         memset(extension, 0,MAX_EXTENSION * 2);
+        sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 
-	sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
-	printf("cs1550_write with path / %s / %s . %s\n",directory,filename,extension);
+	printf("cs1550 read from / %s / %s . %s\n", directory, filename, extension);
+	
 	
 	int dir_loc = cs1550_find_dir_loc(directory);
 	if(dir_loc<0){
 	  printf("dir not found\n");
 	  return -ENOENT;
 	}
-	int file_loc = cs1550_find_file_loc(dir_loc, filename, NULL, NULL);
+	int file_loc = cs1550_find_file_loc(dir_loc, filename, NULL);
 	if(file_loc<0){
 	  printf("file not found\n");
 	  return -ENOENT;
 	}
+	
+
 	printf("opening disk\n");
 	FILE * disk;
 	disk = fopen(".disk", "rb+");
@@ -699,10 +682,14 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 
 	printf("finding file_block\n");
 	long file_block = dir.files[file_loc].nStartBlock;
-	if(offset>dir.files[file_loc].fsize){
+
+
+	size_t fsize = dir.files[file_loc].fsize;	
+	if(offset>fsize){
 	  printf("offiset is bigger than filesize\n");
 	  return -EFBIG;
 	}
+
 	if(file_block<=0){
 	  printf("problem with the file_block\n");
 	  return -1;
@@ -740,21 +727,161 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 
 	
 	int byte_in_block = offset % MAX_DATA_IN_BLOCK;
-	for(i = 0; i<size; i++){
-	  while(i%MAX_DATA_IN_BLOCK!=0||i==0){
-	    file.data[i%MAX_DATA_IN_BLOCK]=buf[i];
+
+	//check to make sure path exists
+	//check that size is > 0
+	//check that offset is <= to the file size
+	//read in data
+	//set size and return, or error
+
+	
+	int count;
+	for(count = 0; count <size; count++ ){
+	  if((count+byte_in_block)%MAX_DATA_IN_BLOCK==0&&count!=0){
+	    //next block
+	    long next_block = file.nNextBlock;
+	    fseek(disk, next_block*BLOCK_SIZE, SEEK_SET);
+	    fread((void*)&file,sizeof(cs1550_disk_block),1,disk);
+	  }
+	  if(count+offset>fsize){
+	    break;
+	  }
+	  buf[count] = file.data[(count+byte_in_block)%MAX_DATA_IN_BLOCK];
+	  printf("read %c from %d\n", file.data[(count+byte_in_block)%MAX_DATA_IN_BLOCK], (count+byte_in_block)%MAX_DATA_IN_BLOCK);
+	}
+	
+	fclose(disk);
+	return count;
+}
+
+/* 
+ * Write size bytes from buf into file starting from offset
+ *
+ */
+static int cs1550_write(const char *path, const char *buf, size_t size, 
+			  off_t offset, struct fuse_file_info *fi)
+{
+	(void) buf;
+	(void) offset;
+	(void) fi;
+	(void) path;
+	
+	if(size<=0){
+	  printf("size = %d",size);
+	  return -1;
+	}
+
+	char directory[MAX_FILENAME *2];
+        char filename [MAX_FILENAME *2];
+        char extension[MAX_EXTENSION*2];
+
+        //set strings to empty
+        memset(directory, 0,MAX_FILENAME  * 2);
+        memset(filename,  0,MAX_FILENAME  * 2);
+        memset(extension, 0,MAX_EXTENSION * 2);
+
+	sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	printf("cs1550_write with path / %s / %s . %s\n",directory,filename,extension);
+	
+	int dir_loc = cs1550_find_dir_loc(directory);
+	if(dir_loc<0){
+	  printf("dir not found\n");
+	  return -ENOENT;
+	}
+	int file_loc = cs1550_find_file_loc(dir_loc, filename, NULL);
+	if(file_loc<0){
+	  printf("file not found\n");
+	  return -ENOENT;
+	}
+	printf("opening disk\n");
+	FILE * disk;
+	disk = fopen(".disk", "rb+");
+	if(disk==NULL){
+	  printf("problem opening the disk\n");
+	  return -1;
+	}
+	printf("reading root\n");
+	cs1550_root_directory root;
+	int read_ret = fread((void*)&root, sizeof(cs1550_root_directory), 1, disk);
+	if(read_ret<0){
+	  printf("problem reading the root\n");
+	  return -1;
+	}
+	long dir_block = root.directories[dir_loc].nStartBlock;
+	
+	printf("reading dir\n");
+	cs1550_directory_entry dir;
+	fseek(disk, dir_block*BLOCK_SIZE, SEEK_SET);
+	read_ret = fread((void*)&dir, sizeof(cs1550_directory_entry), 1, disk);
+	if(read_ret<0){
+	  printf("problem reading the dir\n");
+	  return -1;
+	}
+
+	printf("finding file_block\n");
+	long file_block = dir.files[file_loc].nStartBlock;
+	if(offset>dir.files[file_loc].fsize){
+	  printf("offiset is bigger than filesize\n");
+	  return -EFBIG;
+	}
+	dir.files[file_loc].fsize = offset + size;
+	if(file_block<=0){
+	  printf("problem with the file_block\n");
+	  return -1;
+	}
+
+	int offset_blocks = offset/MAX_DATA_IN_BLOCK;
+	printf("calc'd num of blocks in the offset as %d\n", offset_blocks);
+	
+	cs1550_disk_block file;
+	fseek(disk, file_block*BLOCK_SIZE, SEEK_SET);
+	read_ret = fread((void*)&file, sizeof(cs1550_disk_block), 1, disk);
+	if(read_ret<0){
+	  printf("problem reading disk block\n");
+	  return -1;
+	}
+	
+	printf("seeking past the offset blocks\n");
+	int i;
+	for(i=0; i<offset_blocks; i++){//get to where we're going
+	  printf("i = %d\n",i);
+	  file_block = file.nNextBlock;
+	  if(file_block<=0){
+	    printf("problem with the file block number\n");
+	    return -1;
+	  }
+
+	  fseek(disk, file_block*BLOCK_SIZE, SEEK_SET);
+          read_ret = fread((void*)&file, sizeof(cs1550_disk_block), 1, disk);
+          if(read_ret<0){
+            printf("problem reading disk block\n");
+            return -1;
+          }  
+	}
+	printf("seeked\n");
+
+	int cont = 0;	
+	int byte_in_block = offset % MAX_DATA_IN_BLOCK;
+	for(i = 0; i<size; i){
+	  while((i+byte_in_block)%MAX_DATA_IN_BLOCK!=0||i==0||cont==1){
+	    cont = 0;
+	    file.data[(i+byte_in_block)%MAX_DATA_IN_BLOCK]=buf[i];
+	    printf("wrote %c,%c to %d\n", buf[i],file.data[(i+byte_in_block)%MAX_DATA_IN_BLOCK], (i+byte_in_block)%MAX_DATA_IN_BLOCK);
 	    i++;
 	    if(i>size)
 	      break;
 	  }
-	  if(i>size)
-	    break;
-	  fwrite((void*)&file, sizeof(cs1550_disk_block),1,disk);
 	  fclose(disk);
 	  file.nNextBlock = cs1550_find_free_block();
 	  disk = fopen(".disk", "rb+");
-	  fseek(disk, file.nNextBlock*BLOCK_SIZE, SEEK_SET);
+	  fseek(disk, file_block*BLOCK_SIZE, SEEK_SET);
+	  fwrite((void*)&file, sizeof(cs1550_disk_block),1,disk);
+	  if(i>size)
+	    break;
+	  file_block = file.nNextBlock;
+	  fseek(disk, file_block*BLOCK_SIZE, SEEK_SET);
 	  fread((void*)&file, sizeof(cs1550_disk_block),1,disk);
+	  cont = 1;
 	}
 	dir.files[file_loc].fsize = offset+size;
 	fseek(disk, dir_block*BLOCK_SIZE, SEEK_SET);
