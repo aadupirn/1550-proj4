@@ -135,9 +135,87 @@ static long cs1550_find_free_block(){
 
 }
 
-
+//block is intended to be the first block to free
 static int cs1550_mark_blocks_free(long block){
-  //TODO
+
+  printf("freeing blocks\n");
+  if(block <=0){
+    printf("not gonna do that\n");
+    return -1;
+  }
+
+  FILE * disk;
+  disk = fopen(".disk", "rb+");
+
+  unsigned char bits[BLOCK_SIZE*3];
+  
+  fseek(disk, -1 * BLOCK_SIZE * 3, SEEK_END);
+
+  fread(bits, BLOCK_SIZE * 3, 1, disk);
+
+  
+  fseek(disk, BLOCK_SIZE * block, SEEK_SET);
+
+  cs1550_disk_block file;
+  fread((void*)&file, sizeof(cs1550_disk_block), 1, disk);
+
+
+  //we're freeing everying this points to too
+  int i;  //which byte
+  int j;  //which bit
+  while(file.nNextBlock > 0){
+    //TODO free current block
+    i = block / 8;
+    j = block % 8;
+    if(j==0)
+      bits[i]&=0xFE;
+    else if(j==1)
+      bits[i]&=0xFD;
+    else if(j==2)
+      bits[i]&=0xFB;
+    else if(j==3)
+      bits[i]&=0xF7;
+    else if(j==4)
+      bits[i]&=0xEF;
+    else if(j==5)
+      bits[i]&=0xDF;
+    else if(j==6)
+      bits[i]&=0xBF;
+    else if(j==7)
+      bits[i]&=0x7F;
+    else
+      printf("wait what??????????!?!?!?!?!?!?!?!??!?!!?!?!??!!?!?\n?!?!?!?!?!?!?!?!??!?!?!?!?!?!??!?!!?!?!?!\n");
+    //get next block
+    block = file.nNextBlock;
+    fseek(disk, BLOCK_SIZE * block, SEEK_SET);
+    fread((void*)&file, sizeof(cs1550_disk_block), 1, disk);
+  }
+
+  //TODO free current block
+  i = block / 8;
+  j = block % 8;
+  if(j==0)
+      bits[i]&=0xFE;
+    else if(j==1)
+      bits[i]&=0xFD;
+    else if(j==2)
+      bits[i]&=0xFB;
+    else if(j==3)
+      bits[i]&=0xF7;
+    else if(j==4)
+      bits[i]&=0xEF;
+    else if(j==5)
+      bits[i]&=0xDF;
+    else if(j==6)
+      bits[i]&=0xBF;
+    else if(j==7)
+      bits[i]&=0x7F;
+    else
+      printf("wait what??????????!?!?!?!?!?!?!?!??!?!!?!?!??!!?!?\n?!?!?!?!?!?!?!?!??!?!?!?!?!?!??!?!!?!?!?!\n");
+
+  fseek(disk, -1 * BLOCK_SIZE * 3, SEEK_END);
+  fwrite((void*)bits, BLOCK_SIZE*3, 1, disk);
+  fclose(disk);
   return 0;
 }
 
